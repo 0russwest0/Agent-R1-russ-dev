@@ -9,8 +9,10 @@ theme:
   language: en
   features:
     - navigation.tabs
+    - navigation.indexes
     - navigation.sections
     - navigation.top
+    - toc.integrate
     - content.code.copy
     - content.code.annotate
     - search.highlight
@@ -33,26 +35,32 @@ theme:
   icon:
     repo: fontawesome/brands/github
 
-extra:
-  alternate:
-    - name: English
-      link: /
-      lang: en
-    - name: 中文
-      link: /zh/
-      lang: zh
-
 nav:
   - Home: index.md
-  - 中文: zh/index.md
+  - Getting Started:
+      - getting-started/index.md
+      - Installation Guide: getting-started/installation-guide.md
+      - Quick Start: getting-started/quick-start.md
+  - Core Concepts:
+      - core-concepts/index.md
+      - Step-level MDP: core-concepts/step-level-mdp.md
+      - Layered Abstractions: core-concepts/layered-abstractions.md
+  - Tutorials:
+      - tutorials/index.md
+      - Agent Task Tutorial: tutorials/agent-task.md
 
 plugins:
   - search
+
+exclude_docs: README.md
 
 markdown_extensions:
   - admonition
   - attr_list
   - md_in_html
+  - pymdownx.emoji:
+      emoji_index: !!python/name:material.extensions.emoji.twemoji
+      emoji_generator: !!python/name:material.extensions.emoji.to_svg
   - pymdownx.details
   - pymdownx.highlight:
       anchor_linenums: true
