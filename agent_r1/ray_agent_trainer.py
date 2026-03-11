@@ -33,7 +33,7 @@ import torch
 from omegaconf import OmegaConf
 from tqdm import tqdm
 
-from agent_r1.metric_utils import compute_data_metrics
+from agent_r1.metric_utils import compute_cumulative_guidance_success, compute_data_metrics
 from verl import DataProto
 from verl.experimental.dataset.sampler import AbstractCurriculumSampler
 from verl.protocol import pad_dataproto_to_divisor
@@ -117,34 +117,101 @@ def compute_advantage(
     returns = torch.zeros_like(data.batch["token_level_rewards"])
 
     valid_data, valid_mask = get_valid_data(data)
+    group_advantage_by_step = config.get("group_advantage_by_step", False) if config is not None else False
+
+    def _compute_grouped_by_step(single_group_fn):
+        grouped_advantages = torch.zeros_like(valid_data.batch["token_level_rewards"])
+        grouped_returns = torch.zeros_like(valid_data.batch["token_level_rewards"])
+        step_indices = valid_data.non_tensor_batch["step_indices"]
+
+        for step_idx in np.unique(step_indices):
+            step_mask_np = step_indices == step_idx
+            step_batch = valid_data.select_idxs(step_mask_np)
+            step_advantages, step_returns = single_group_fn(step_batch)
+            step_mask = torch.from_numpy(step_mask_np).to(grouped_advantages.device)
+            grouped_advantages[step_mask] = step_advantages
+            grouped_returns[step_mask] = step_returns
+
+        return grouped_advantages, grouped_returns
 
     # prepare response group
     if adv_estimator == AdvantageEstimator.GAE:
-        # Compute advantages and returns using Generalized Advantage Estimation (GAE)
-        from agent_r1.core_algos import compute_gae_advantage_return
+        if group_advantage_by_step:
+            from verl.trainer.ppo.core_algos import compute_gae_advantage_return as verl_compute_gae_advantage_return
 
-        valid_advantages, valid_returns = compute_gae_advantage_return(
-            token_level_rewards=valid_data.batch["token_level_rewards"],
-            values=valid_data.batch["values"],
-            response_mask=valid_data.batch["response_mask"],
-            trajectory_uids=valid_data.non_tensor_batch["trajectory_uids"],
-            step_indices=valid_data.non_tensor_batch["step_indices"],
-            gamma=gamma,
-            lam=lam,
-        )
+            valid_advantages, valid_returns = _compute_grouped_by_step(
+                lambda step_batch: verl_compute_gae_advantage_return(
+                    token_level_rewards=step_batch.batch["token_level_rewards"],
+                    values=step_batch.batch["values"],
+                    response_mask=step_batch.batch["response_mask"],
+                    gamma=gamma,
+                    lam=lam,
+                )
+            )
+        else:
+            # Compute advantages and returns using Generalized Advantage Estimation (GAE)
+            from agent_r1.core_algos import compute_gae_advantage_return
+
+            valid_advantages, valid_returns = compute_gae_advantage_return(
+                token_level_rewards=valid_data.batch["token_level_rewards"],
+                values=valid_data.batch["values"],
+                response_mask=valid_data.batch["response_mask"],
+                trajectory_uids=valid_data.non_tensor_batch["trajectory_uids"],
+                step_indices=valid_data.non_tensor_batch["step_indices"],
+                gamma=gamma,
+                lam=lam,
+            )
         advantages[valid_mask] = valid_advantages
         returns[valid_mask] = valid_returns
     elif adv_estimator == AdvantageEstimator.GRPO:
-        # Call compute_grpo_outcome_advantage with parameters matching its definition
-        from agent_r1.core_algos import compute_grpo_outcome_advantage
+        if group_advantage_by_step:
+            from verl.trainer.ppo.core_algos import compute_grpo_outcome_advantage as verl_compute_grpo_outcome_advantage
 
-        valid_advantages, valid_returns = compute_grpo_outcome_advantage(
-            token_level_rewards=valid_data.batch["token_level_rewards"],
-            response_mask=valid_data.batch["response_mask"],
-            index=valid_data.non_tensor_batch["uid"],
-            trajectory_uids=valid_data.non_tensor_batch["trajectory_uids"],
-            norm_adv_by_std_in_grpo=norm_adv_by_std_in_grpo,
-        )
+            valid_advantages, valid_returns = _compute_grouped_by_step(
+                lambda step_batch: verl_compute_grpo_outcome_advantage(
+                    token_level_rewards=step_batch.batch["token_level_rewards"],
+                    response_mask=step_batch.batch["response_mask"],
+                    index=step_batch.non_tensor_batch["uid"],
+                    norm_adv_by_std_in_grpo=norm_adv_by_std_in_grpo,
+                    config=config,
+                )
+            )
+        else:
+            # Call compute_grpo_outcome_advantage with parameters matching its definition
+            from agent_r1.core_algos import compute_grpo_outcome_advantage
+
+            valid_advantages, valid_returns = compute_grpo_outcome_advantage(
+                token_level_rewards=valid_data.batch["token_level_rewards"],
+                response_mask=valid_data.batch["response_mask"],
+                index=valid_data.non_tensor_batch["uid"],
+                trajectory_uids=valid_data.non_tensor_batch["trajectory_uids"],
+                norm_adv_by_std_in_grpo=norm_adv_by_std_in_grpo,
+            )
+        advantages[valid_mask] = valid_advantages
+        returns[valid_mask] = valid_returns
+    elif adv_estimator == AdvantageEstimator.REINFORCE_PLUS_PLUS_BASELINE:
+        if group_advantage_by_step:
+            from verl.trainer.ppo.core_algos import (
+                compute_reinforce_plus_plus_baseline_outcome_advantage as verl_compute_rfpp_baseline,
+            )
+
+            valid_advantages, valid_returns = _compute_grouped_by_step(
+                lambda step_batch: verl_compute_rfpp_baseline(
+                    token_level_rewards=step_batch.batch["token_level_rewards"],
+                    response_mask=step_batch.batch["response_mask"],
+                    index=step_batch.non_tensor_batch["uid"],
+                    config=config,
+                )
+            )
+        else:
+            from agent_r1.core_algos import compute_reinforce_plus_plus_baseline_outcome_advantage
+
+            valid_advantages, valid_returns = compute_reinforce_plus_plus_baseline_outcome_advantage(
+                token_level_rewards=valid_data.batch["token_level_rewards"],
+                response_mask=valid_data.batch["response_mask"],
+                index=valid_data.non_tensor_batch["uid"],
+                trajectory_uids=valid_data.non_tensor_batch["trajectory_uids"],
+            )
         advantages[valid_mask] = valid_advantages
         returns[valid_mask] = valid_returns
 
@@ -323,10 +390,17 @@ class RayAgentTrainer(RayPPOTrainer):
             batch_traj_inputs = []
             batch_traj_outputs = []
             batch_traj_extra_info = defaultdict(list)
-            for n in num_steps:
+            batch_traj_uids = []
+            batch_traj_step_indices = []
+            batch_traj_step_scores = []
+            for traj_idx, n in enumerate(num_steps):
                 # aggregate scores (rewards) by summing them across steps to get trajectory-level return
                 traj_score = step_scores[start : start + n].sum()
                 batch_traj_scores.append(traj_score)
+                traj_uid = test_batch.non_tensor_batch["uid"][traj_idx]
+                batch_traj_uids.extend([traj_uid] * n)
+                batch_traj_step_indices.extend(range(n))
+                batch_traj_step_scores.extend(step_scores[start : start + n].tolist())
 
                 # pick the last step's index for this trajectory
                 last_step_idx_in_traj = start + n - 1
@@ -347,11 +421,19 @@ class RayAgentTrainer(RayPPOTrainer):
 
                 start += n
 
+            batch_cumulative_success = compute_cumulative_guidance_success(
+                trajectory_uids=np.asarray(batch_traj_uids, dtype=object),
+                step_indices=np.asarray(batch_traj_step_indices, dtype=np.int32),
+                step_scores=np.asarray(batch_traj_step_scores, dtype=np.float32),
+            )
+
             sample_scores.extend(batch_traj_scores)
             sample_inputs.extend(batch_traj_inputs)
             sample_outputs.extend(batch_traj_outputs)
 
             reward_extra_infos_dict["reward"].extend(batch_traj_scores)
+            for step_idx, success_vals in batch_cumulative_success.items():
+                reward_extra_infos_dict[f"success_leq_round_{step_idx}"].extend(success_vals.tolist())
             if "reward_extra_info" in result:
                 for key, vals in batch_traj_extra_info.items():
                     reward_extra_infos_dict[key].extend(vals)
@@ -385,7 +467,7 @@ class RayAgentTrainer(RayPPOTrainer):
                 n_max = max([int(name.split("@")[-1].split("/")[0]) for name in metric2val.keys()])
                 for metric_name, metric_val in metric2val.items():
                     if (
-                        (var_name == core_var)
+                        ((var_name == core_var) or var_name.startswith("success_leq_round_"))
                         and any(metric_name.startswith(pfx) for pfx in ["mean", "maj", "best"])
                         and (f"@{n_max}" in metric_name)
                     ):

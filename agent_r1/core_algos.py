@@ -315,3 +315,62 @@ def compute_grpo_outcome_advantage(
         scores = scores.unsqueeze(-1) * response_mask
 
     return scores, scores
+
+
+def compute_reinforce_plus_plus_baseline_outcome_advantage(
+    token_level_rewards: torch.Tensor,
+    response_mask: torch.Tensor,
+    index: np.ndarray,
+    trajectory_uids: np.ndarray,
+) -> tuple[torch.Tensor, torch.Tensor]:
+    """Agent-R1 adaptation of RF++-baseline for multi-step trajectories.
+
+    The original verl RF++-baseline assumes one response row per sample. In Agent-R1,
+    one trajectory consists of multiple step rows, so we first aggregate all step-level
+    rewards into a single trajectory-level outcome reward, compute the leave-group mean
+    baseline by prompt uid, then broadcast the resulting trajectory advantage back to all
+    steps and tokens in that trajectory.
+    """
+    step_scores = (token_level_rewards * response_mask).sum(dim=-1)
+
+    traj2total_score: dict[object, torch.Tensor] = {}
+    traj2index: dict[object, object] = {}
+    id2score = defaultdict(list)
+    id2mean: dict[object, torch.Tensor] = {}
+
+    with torch.no_grad():
+        bsz = step_scores.shape[0]
+
+        for i in range(bsz):
+            traj_uid = trajectory_uids[i]
+            if traj_uid in traj2total_score:
+                traj2total_score[traj_uid] = traj2total_score[traj_uid] + step_scores[i]
+            else:
+                traj2total_score[traj_uid] = step_scores[i]
+                traj2index[traj_uid] = index[i]
+
+        for traj_uid, total_score in traj2total_score.items():
+            id2score[traj2index[traj_uid]].append(total_score)
+
+        for idx in id2score:
+            if len(id2score[idx]) == 1:
+                id2mean[idx] = torch.tensor(0.0, device=step_scores.device, dtype=step_scores.dtype)
+            elif len(id2score[idx]) > 1:
+                id2mean[idx] = torch.mean(torch.stack(id2score[idx]))
+            else:
+                raise ValueError(f"no score in prompt index: {idx}")
+
+        traj2adv: dict[object, torch.Tensor] = {}
+        for traj_uid, total_score in traj2total_score.items():
+            idx = traj2index[traj_uid]
+            traj2adv[traj_uid] = total_score - id2mean[idx]
+
+        scores = step_scores.clone()
+        for i in range(bsz):
+            scores[i] = traj2adv[trajectory_uids[i]]
+
+        response_length = token_level_rewards.shape[-1]
+        scores = scores.unsqueeze(-1).tile([1, response_length]) * response_mask
+        scores = verl_F.masked_whiten(scores, response_mask) * response_mask
+
+    return scores, scores

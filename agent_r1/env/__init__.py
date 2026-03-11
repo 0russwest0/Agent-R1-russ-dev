@@ -1,5 +1,5 @@
 from .base import AgentEnv, Observation
-from .envs import ToolEnv
+from .envs import TeacherGuidanceEnv, ToolEnv
 from .tool_format import ToolCallAction, ToolFormatWrapper
 
-__all__ = ["AgentEnv", "Observation", "ToolCallAction", "ToolFormatWrapper", "ToolEnv"]
+__all__ = ["AgentEnv", "Observation", "ToolCallAction", "ToolFormatWrapper", "ToolEnv", "TeacherGuidanceEnv"]

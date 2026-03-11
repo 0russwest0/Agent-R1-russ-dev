@@ -1,3 +1,4 @@
+from collections import defaultdict
 from typing import Any
 
 import numpy as np
@@ -6,6 +7,39 @@ import torch
 from verl import DataProto
 from verl.trainer.ppo.metric_utils import _compute_response_info
 from verl.trainer.ppo.metric_utils import compute_data_metrics as compute_sequence_data_metrics
+
+
+def compute_cumulative_guidance_success(
+    trajectory_uids: np.ndarray,
+    step_indices: np.ndarray,
+    step_scores: np.ndarray,
+) -> dict[int, np.ndarray]:
+    """
+    Computes cumulative trajectory success rate buckets.
+
+    Step ``k`` means: whether a question has been solved within ``<= k`` answer rounds.
+    For teacher guidance, this is equivalent to "solved within <= k guidance rounds"
+    because ``step_indices`` already encode the student answer turn.
+    """
+    if len(trajectory_uids) == 0:
+        return {}
+
+    traj2steps: dict[object, list[tuple[int, float]]] = defaultdict(list)
+    for uid, step_idx, step_score in zip(trajectory_uids, step_indices, step_scores, strict=True):
+        traj2steps[uid].append((int(step_idx), float(step_score > 0)))
+
+    max_step_idx = max(int(step_idx) for step_idx in step_indices)
+    success_by_step = {step_idx: [] for step_idx in range(max_step_idx + 1)}
+
+    for traj_steps in traj2steps.values():
+        traj_steps.sort(key=lambda item: item[0])
+        step2success = {step_idx: success for step_idx, success in traj_steps}
+        cumulative_success = 0.0
+        for step_idx in range(max_step_idx + 1):
+            cumulative_success = max(cumulative_success, step2success.get(step_idx, 0.0))
+            success_by_step[step_idx].append(cumulative_success)
+
+    return {step_idx: np.asarray(vals, dtype=np.float32) for step_idx, vals in success_by_step.items()}
 
 
 def compute_data_metrics(batch: DataProto, use_critic: bool = True) -> dict[str, Any]:
@@ -76,5 +110,14 @@ def compute_data_metrics(batch: DataProto, use_critic: bool = True) -> dict[str,
             "critic/rewards/trajectory/min": traj_rewards.min().item(),
         }
     )
+
+    if "step_indices" in batch.non_tensor_batch:
+        cumulative_success = compute_cumulative_guidance_success(
+            trajectory_uids=trajectory_uids,
+            step_indices=batch.non_tensor_batch["step_indices"],
+            step_scores=sequence_score.detach().cpu().numpy(),
+        )
+        for step_idx, success_vals in cumulative_success.items():
+            metrics[f"guidance/success_rate_leq_round_{step_idx}"] = float(success_vals.mean())
 
     return metrics
