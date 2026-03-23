@@ -14,13 +14,37 @@
 
 </div>
 
-Agent-R1 is an open-source framework for training powerful language agents with end-to-end reinforcement learning. With Agent-R1, you can build custom agent workflows, define interactive environments and tools, and train multi-step agents in a unified RL pipeline.
+<p align="center"><img src="./image/agent.png" width="800px" alt="Agent vs Workflow" /></p>
 
-> This branch is under active development as part of a major refactor. Interfaces are now much cleaner, but some APIs and docs may still evolve.
+## News
+
+- [2026.03.23] **The Agent-R1 codebase has been fully refactored.** (The previous version has been archived to the `legacy` branch) This update introduces **Layered Abstractions** (`AgentFlowBase` -> `AgentEnvLoop` -> `ToolEnv`) for a cleaner, object-oriented API. We also formalized the **Step-level MDP** foundation to enable flexible context management during RL training. Please refer to our new [Documentation Site](https://agentr1.github.io/Agent-R1/) for details.
+
+- [2026.03.04] We've launched [Claw-R1](https://agentr1.github.io/Claw-R1/), a more advanced framework designed to empower General Agents (OpenClaw etc.) with Agentic RL through a Middleware design. Check it out at [AgentR1/Claw-R1](https://github.com/AgentR1/Claw-R1).
+
+
+## Overview
+
+**Agent-R1** is an open-source framework for training powerful language **agents** with **end-to-end reinforcement learning**. With Agent-R1, you can build custom agent workflows, define interactive environments and tools, and train multi-step agents in a unified RL pipeline.
+
+> **Also check out [Awesome-Agent-RL](https://github.com/0russwest0/Awesome-Agent-RL)**: Our curated collection of papers and resources on unlocking the potential of Agents through Reinforcement Learning.
+
+<p align="center"><img src="./image/framework.png" width="800px" alt="RICO Framework" /></p>
+
+
 
 ## Getting Started
 
-Content coming soon.
+Agent-R1 uses the same environment setup as [verl](https://verl.readthedocs.io/en/latest/start/install.html). After preparing that environment, the recommended reading path is:
+
+1. Read the [Getting Started](https://agentr1.github.io/Agent-R1/getting-started/) page for the minimal setup flow.
+2. Use [`examples/data_preprocess/gsm8k.py`](examples/data_preprocess/gsm8k.py) and [`examples/run_qwen2.5-3b.sh`](examples/run_qwen2.5-3b.sh) as a sanity check that the environment is wired correctly.
+3. Move to the [Agent Task Tutorial](https://agentr1.github.io/Agent-R1/tutorials/agent-task/) for the main Agent-R1 workflow based on multi-step interaction and tool use.
+
+Core concepts:
+
+- [Step-level MDP](https://agentr1.github.io/Agent-R1/core-concepts/step-level-mdp/)
+- [Layered Abstractions](https://agentr1.github.io/Agent-R1/core-concepts/layered-abstractions/)
 
 ## Awesome Projects Using Agent-R1
 
