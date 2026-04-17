@@ -34,6 +34,9 @@ Write a short piece of guidance for the student.
 - Keep the guidance short and concrete.
 """
 
+MAX_INCORRECT_ANSWER_TOKENS = 1024
+MAX_TEACHER_GUIDANCE_TOKENS = 2048
+
 
 def _extract_text_content(content: Any) -> str:
     if isinstance(content, str):
@@ -95,11 +98,11 @@ class TeacherGuidanceEnv(AgentEnv):
         teacher_temperature: float = 0.2,
         teacher_max_tokens: int = 256,
         reveal_answer: bool = False,
+        agent_max_steps: int | None = None,
         **kwargs,
     ):
         if not teacher_endpoint:
             raise ValueError("TeacherGuidanceEnv requires teacher_endpoint")
-
         self.teacher_endpoint = teacher_endpoint
         self.teacher_model_name = teacher_model_name
         self.teacher_api_key = teacher_api_key
@@ -108,12 +111,16 @@ class TeacherGuidanceEnv(AgentEnv):
         self.teacher_temperature = teacher_temperature
         self.teacher_max_tokens = teacher_max_tokens
         self.reveal_answer = reveal_answer
+        self.agent_max_steps = agent_max_steps
+        self.tokenizer = kwargs.get("tokenizer")
+        self.tokenizer_skip_special_tokens = kwargs.get("tokenizer_skip_special_tokens", True)
 
         self._messages: list[dict[str, Any]] = []
         self._data_source: str | None = None
         self._ground_truth: str | None = None
         self._question: str = ""
         self._reference_solution: str = ""
+        self._step_idx: int = 0
 
     def reset(self, **kwargs) -> Observation:
         self._messages = list(kwargs.get("raw_prompt", []))
@@ -131,6 +138,7 @@ class TeacherGuidanceEnv(AgentEnv):
                     question = _extract_text_content(message.get("content"))
                     break
         self._question = question or ""
+        self._step_idx = 0
 
         return Observation(messages=list(self._messages))
 
@@ -148,6 +156,27 @@ class TeacherGuidanceEnv(AgentEnv):
         if isinstance(score, dict):
             score = score.get("score", 0.0)
         return 1.0 if float(score) >= 1.0 else 0.0
+
+    def _truncate_incorrect_answer(self, action: Action) -> str:
+        if action.token_ids is None or self.tokenizer is None:
+            return action.text or ""
+
+        truncated_token_ids = action.token_ids[:MAX_INCORRECT_ANSWER_TOKENS]
+        if len(truncated_token_ids) == len(action.token_ids):
+            return action.text or ""
+
+        return self.tokenizer.decode(truncated_token_ids, skip_special_tokens=self.tokenizer_skip_special_tokens)
+
+    def _truncate_text_by_tokens(self, text: str, max_tokens: int) -> str:
+        if self.tokenizer is None:
+            return text
+
+        token_ids = self.tokenizer.encode(text, add_special_tokens=False)
+        truncated_token_ids = token_ids[:max_tokens]
+        if len(truncated_token_ids) == len(token_ids):
+            return text
+
+        return self.tokenizer.decode(truncated_token_ids, skip_special_tokens=self.tokenizer_skip_special_tokens)
 
     def _build_teacher_messages(self, student_answer: str) -> list[dict[str, str]]:
         ground_truth_block = (
@@ -182,12 +211,20 @@ class TeacherGuidanceEnv(AgentEnv):
             raise TypeError("TeacherGuidanceEnv only accepts Action with text")
 
         student_answer = action.text
-        self._messages.append({"role": "assistant", "content": student_answer})
+        self._step_idx += 1
 
         reward = self._score_answer(student_answer)
         if reward >= 1.0:
+            self._messages.append({"role": "assistant", "content": student_answer})
             return Observation(messages=list(self._messages)), 1.0, True, {}
 
+        student_answer = self._truncate_incorrect_answer(action)
+        self._messages.append({"role": "assistant", "content": student_answer})
+
+        if self.agent_max_steps is not None and self._step_idx >= self.agent_max_steps:
+            return Observation(messages=list(self._messages)), 0.0, True, {"terminated_at_max_steps": True}
+
         guidance = await self._generate_guidance(student_answer)
+        guidance = self._truncate_text_by_tokens(guidance, MAX_TEACHER_GUIDANCE_TOKENS)
         self._messages.append({"role": "user", "content": guidance})
         return Observation(messages=list(self._messages)), 0.0, False, {}

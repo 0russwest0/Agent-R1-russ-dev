@@ -547,6 +547,7 @@ class AgentFlowWorkerBase:
             top_p=config.top_p,
             repetition_penalty=1.0,
             logprobs=config.calculate_log_probs,
+            max_tokens=config.response_length,
         )
 
         # override sampling params for validation

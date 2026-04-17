@@ -63,6 +63,9 @@ class AgentEnvLoop(AgentFlowBase):
             env_kwargs = json.loads(env_kwargs)
 
         merged = {**self.env_kwargs, **env_kwargs}
+        merged.setdefault("agent_max_steps", self.max_steps)
+        merged.setdefault("tokenizer", self.tokenizer)
+        merged.setdefault("tokenizer_skip_special_tokens", self.skip_special_tokens)
 
         env_type = merged.pop("env_type")
         return AgentEnv.from_config(env_type, **merged)

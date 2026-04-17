@@ -118,6 +118,10 @@ def compute_advantage(
 
     valid_data, valid_mask = get_valid_data(data)
     group_advantage_by_step = config.get("group_advantage_by_step", False) if config is not None else False
+    use_verl_advantage = config.get("use_verl_advantage", None) if config is not None else None
+    if use_verl_advantage is None:
+        # Backward compatibility: the old grouped-by-step path always reused verl's estimators.
+        use_verl_advantage = group_advantage_by_step
 
     def _compute_grouped_by_step(single_group_fn):
         grouped_advantages = torch.zeros_like(valid_data.batch["token_level_rewards"])
@@ -134,23 +138,33 @@ def compute_advantage(
 
         return grouped_advantages, grouped_returns
 
+    def _compute_advantages(single_batch_fn):
+        if group_advantage_by_step:
+            return _compute_grouped_by_step(single_batch_fn)
+        return single_batch_fn(valid_data)
+
     # prepare response group
     if adv_estimator == AdvantageEstimator.GAE:
-        if group_advantage_by_step:
+        if use_verl_advantage:
             from verl.trainer.ppo.core_algos import compute_gae_advantage_return as verl_compute_gae_advantage_return
 
-            valid_advantages, valid_returns = _compute_grouped_by_step(
-                lambda step_batch: verl_compute_gae_advantage_return(
-                    token_level_rewards=step_batch.batch["token_level_rewards"],
-                    values=step_batch.batch["values"],
-                    response_mask=step_batch.batch["response_mask"],
+            valid_advantages, valid_returns = _compute_advantages(
+                lambda batch_proto: verl_compute_gae_advantage_return(
+                    token_level_rewards=batch_proto.batch["token_level_rewards"],
+                    values=batch_proto.batch["values"],
+                    response_mask=batch_proto.batch["response_mask"],
                     gamma=gamma,
                     lam=lam,
                 )
             )
         else:
-            # Compute advantages and returns using Generalized Advantage Estimation (GAE)
             from agent_r1.core_algos import compute_gae_advantage_return
+
+            if group_advantage_by_step:
+                raise ValueError(
+                    "agent_r1 GAE does not support group_advantage_by_step. "
+                    "Set algorithm.use_verl_advantage=True or disable algorithm.group_advantage_by_step."
+                )
 
             valid_advantages, valid_returns = compute_gae_advantage_return(
                 token_level_rewards=valid_data.batch["token_level_rewards"],
@@ -164,53 +178,56 @@ def compute_advantage(
         advantages[valid_mask] = valid_advantages
         returns[valid_mask] = valid_returns
     elif adv_estimator == AdvantageEstimator.GRPO:
-        if group_advantage_by_step:
+        if use_verl_advantage:
             from verl.trainer.ppo.core_algos import compute_grpo_outcome_advantage as verl_compute_grpo_outcome_advantage
 
-            valid_advantages, valid_returns = _compute_grouped_by_step(
-                lambda step_batch: verl_compute_grpo_outcome_advantage(
-                    token_level_rewards=step_batch.batch["token_level_rewards"],
-                    response_mask=step_batch.batch["response_mask"],
-                    index=step_batch.non_tensor_batch["uid"],
+            valid_advantages, valid_returns = _compute_advantages(
+                lambda batch_proto: verl_compute_grpo_outcome_advantage(
+                    token_level_rewards=batch_proto.batch["token_level_rewards"],
+                    response_mask=batch_proto.batch["response_mask"],
+                    index=batch_proto.non_tensor_batch["uid"],
                     norm_adv_by_std_in_grpo=norm_adv_by_std_in_grpo,
                     config=config,
                 )
             )
         else:
-            # Call compute_grpo_outcome_advantage with parameters matching its definition
             from agent_r1.core_algos import compute_grpo_outcome_advantage
 
-            valid_advantages, valid_returns = compute_grpo_outcome_advantage(
-                token_level_rewards=valid_data.batch["token_level_rewards"],
-                response_mask=valid_data.batch["response_mask"],
-                index=valid_data.non_tensor_batch["uid"],
-                trajectory_uids=valid_data.non_tensor_batch["trajectory_uids"],
-                norm_adv_by_std_in_grpo=norm_adv_by_std_in_grpo,
+            valid_advantages, valid_returns = _compute_advantages(
+                lambda batch_proto: compute_grpo_outcome_advantage(
+                    token_level_rewards=batch_proto.batch["token_level_rewards"],
+                    response_mask=batch_proto.batch["response_mask"],
+                    index=batch_proto.non_tensor_batch["uid"],
+                    trajectory_uids=batch_proto.non_tensor_batch["trajectory_uids"],
+                    norm_adv_by_std_in_grpo=norm_adv_by_std_in_grpo,
+                )
             )
         advantages[valid_mask] = valid_advantages
         returns[valid_mask] = valid_returns
     elif adv_estimator == AdvantageEstimator.REINFORCE_PLUS_PLUS_BASELINE:
-        if group_advantage_by_step:
+        if use_verl_advantage:
             from verl.trainer.ppo.core_algos import (
                 compute_reinforce_plus_plus_baseline_outcome_advantage as verl_compute_rfpp_baseline,
             )
 
-            valid_advantages, valid_returns = _compute_grouped_by_step(
-                lambda step_batch: verl_compute_rfpp_baseline(
-                    token_level_rewards=step_batch.batch["token_level_rewards"],
-                    response_mask=step_batch.batch["response_mask"],
-                    index=step_batch.non_tensor_batch["uid"],
+            valid_advantages, valid_returns = _compute_advantages(
+                lambda batch_proto: verl_compute_rfpp_baseline(
+                    token_level_rewards=batch_proto.batch["token_level_rewards"],
+                    response_mask=batch_proto.batch["response_mask"],
+                    index=batch_proto.non_tensor_batch["uid"],
                     config=config,
                 )
             )
         else:
             from agent_r1.core_algos import compute_reinforce_plus_plus_baseline_outcome_advantage
 
-            valid_advantages, valid_returns = compute_reinforce_plus_plus_baseline_outcome_advantage(
-                token_level_rewards=valid_data.batch["token_level_rewards"],
-                response_mask=valid_data.batch["response_mask"],
-                index=valid_data.non_tensor_batch["uid"],
-                trajectory_uids=valid_data.non_tensor_batch["trajectory_uids"],
+            valid_advantages, valid_returns = _compute_advantages(
+                lambda batch_proto: compute_reinforce_plus_plus_baseline_outcome_advantage(
+                    token_level_rewards=batch_proto.batch["token_level_rewards"],
+                    response_mask=batch_proto.batch["response_mask"],
+                    index=batch_proto.non_tensor_batch["uid"],
+                    trajectory_uids=batch_proto.non_tensor_batch["trajectory_uids"],
+                )
             )
         advantages[valid_mask] = valid_advantages
         returns[valid_mask] = valid_returns
