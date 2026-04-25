@@ -6,6 +6,7 @@ import torch
 import torch.distributed as dist
 from tensordict import TensorDict
 
+from verl.single_controller.base.decorator import Dispatch, register
 from verl.utils import tensordict_utils as tu
 from verl.utils.device import get_device_name
 from verl.utils.seqlen_balancing import roundup_divisible
@@ -120,6 +121,7 @@ class ActorRolloutRefWorker(VerlActorRolloutRefWorker):
         _install_agent_r1_micro_batching_patch()
         super().__init__(*args, **kwargs)
 
+    @register(dispatch_mode=Dispatch.ONE_TO_ALL)
     def init_model(self):
         _install_agent_r1_micro_batching_patch()
         return super().init_model()
