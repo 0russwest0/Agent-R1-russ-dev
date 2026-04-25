@@ -123,7 +123,7 @@ class TaskRunner:
 
         # use new model engine implementation
         if use_legacy_worker_impl == "disable":
-            from verl.workers.engine_workers import ActorRolloutRefWorker
+            from agent_r1.workers.engine_workers import ActorRolloutRefWorker
 
             actor_rollout_cls = ActorRolloutRefWorker
             ray_worker_group_cls = RayWorkerGroup
@@ -166,7 +166,7 @@ class TaskRunner:
                 from verl.workers.fsdp_workers import CriticWorker
             elif use_legacy_worker_impl == "disable":
                 # we don't need to specialize critic worker. Just use TrainingWorker
-                from verl.workers.engine_workers import TrainingWorker
+                from agent_r1.workers.engine_workers import TrainingWorker
 
                 CriticWorker = TrainingWorker
                 print("Using new worker implementation")
